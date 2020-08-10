@@ -12,8 +12,8 @@ pip install -r requirements.txt
 
 #### cli
 
-![example1](.\pic\example1.png)
+![example1](pic/example1.png)
 
 
 
-![example2](.\pic\example2.png)
+![example2](pic/example2.png)
