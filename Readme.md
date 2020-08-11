@@ -8,6 +8,10 @@ Tested with Python3@Ubuntu16.04
 
 pip install -r requirements.txt
 
+### DNS
+
+Web test probably fail because the **dns cache poisoning**, try set a clean domain name server or modify hosts file to make it work.
+
 ## Example
 
 #### cli

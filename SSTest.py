@@ -209,7 +209,7 @@ class Connect:
         except Exception as e:
             self.log.error(e)
 
-    def fetch(self, url, timeout=20):
+    def fetch(self, url, timeout=TIMEOUT):
         r = requests.get(url, timeout=timeout, verify=True,
                          headers={'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; rv:2.0.1) Gecko/20100101 Firefox/4.0.1'},
                          # proxies={'http': self.data['socks5_proxy'], 'https': self.data['socks5_proxy']}
@@ -218,10 +218,10 @@ class Connect:
 
 
 class SSProxy:
-    def __init__(self, cipher, test='', console=False, log=None):
+    def __init__(self, cipher='', data=None, test='', console=False, log=None):
         self.log = makelog(log=log, console=console)
         self.test = test
-        self.data = {'cipher': cipher, 'network': {}, 'info': {}}
+        self.data = data if data else {'cipher': cipher, 'network': {}, 'info': {}}
         self.console = console
 
     def decode(self):
@@ -238,6 +238,8 @@ class SSProxy:
             data['domain'] = data['server']
             data['server'] = dns.resolver.resolve(data['domain'], 'A')[0].address
         self.data['info'].update(data)
+        if data:
+            self.data['key'] = '{server}:{port}'.format(**data)
         self.func_test()
 
     def func_test(self):
@@ -348,7 +350,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     log = makelog(console=True)
     if args.file:
-        items = re.findall('ssr*://\S+', open(args.file).read(), re.I)
+        items = re.findall('ssr*://[^\s,]+', open(args.file).read(), re.I)
     elif args.cipher:
         items = [args.cipher]
     for cipher in items:
