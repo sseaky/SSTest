@@ -53,19 +53,22 @@ def execute(cmd, stdout=PIPE, stderr=STDOUT, encoding='utf-8', shell=False, log=
 
 
 def b64decode(s):
-    if not s.strip():
-        return ''
-    if len(s) % 4 != 0:
-        s += (4 - len(s) % 4) * '='
-    return base64.b64decode(s).decode()
+    try:
+        if not s.strip():
+            return ''
+        if len(s) % 4 != 0:
+            s += (4 - len(s) % 4) * '='
+        return base64.b64decode(s).decode()
+    except:
+        return
 
 
 def ss_decode(cipher):
     ss = parse.unquote(cipher)
     data = {'raw': cipher, 'type': 'ss'}
     p1 = '^ss://(?P<cipher>[^#]*)(#(?P<name>.+$))*'
-    p2 = '^(?P<pwd_raw>\w+)@(?P<server>[^:]+):(?P<port>\d+)(\?(?P<extra>[^#]+))*'
-    p3 = '^(?P<method>[^:]+):(?P<pwd>[^@]+)@(?P<server>[^:]+):(?P<port>\d+)(\?(?P<extra>[^#]+))*'
+    p2 = '^(?P<pwd_raw>[\w=]+)@(?P<server>[^:]+):(?P<port>\d+)(\?(?P<extra>[^#]+))*'
+    p3 = '^(?P<method>[^:]+):(?P<pwd>.+)@(?P<server>[^:]+):(?P<port>\d+)(\?(?P<extra>[^#]+))*'
 
     m1 = re.search(p1, ss, re.I)
     if not m1:
@@ -79,7 +82,10 @@ def ss_decode(cipher):
         pwd_raw = b64decode(data['pwd_raw'])
         data['method'], data['pwd'] = pwd_raw.split(':', 1)
     if not data.get('server'):
-        m3 = re.search(p3, b64decode(data['cipher']), re.I)
+        de = b64decode(data['cipher'])
+        if not de:
+            return data
+        m3 = re.search(p3, de, re.I)
         data.update(m3.groupdict())
     return data
 
@@ -97,6 +103,8 @@ def ssr_decode(cipher):
         plain1 = '{}?{}'.format(*[b64decode(x) for x in s.split('_')])
     else:
         plain1 = b64decode(m1.group('cipher'))
+    if not plain1:
+        return {}
     data = re.search(p2, plain1, re.I).groupdict('')
     data['pwd'] = b64decode(data['raw_pwd'])
     data['param'] = {}
@@ -156,7 +164,7 @@ class Connect:
     def __init__(self, data, log=None):
         self.log = makelog(log)
         self.data = data
-        self.lport = next_free_port()
+        self.lport = next_free_port(rnd=True)
         self.geo = False
         pidfile = 'sslocal.pid'
         logfile = 'sslocal.log'
@@ -229,32 +237,44 @@ class SSProxy:
         self.log.info('Decoding')
         s = self.data['cipher']
         if re.search('^ss:', s, re.I):
-            data = ss_decode(s)
+            info = ss_decode(s)
         elif re.search('^ssr:', s, re.I):
-            data = ssr_decode(s)
+            info = ssr_decode(s)
         else:
-            data = {}
-        if data.get('server') and re.search('[a-z]', data['server'], re.I):
-            data['domain'] = data['server']
-            data['server'] = dns.resolver.resolve(data['domain'], 'A')[0].address
-        self.data['info'].update(data)
-        if data:
-            self.data['key'] = '{server}:{port}'.format(**data)
+            info = {}
+        if info.get('server'):
+            if re.search('[a-z]', info['server'], re.I):
+                info['domain'] = info['server']
+                info['server'] = dns.resolver.resolve(info['domain'], 'A')[0].address
+            self.data['key'] = '{server}:{port}'.format(**info)
+        self.data['info'].update(info)
+
         self.func_test()
 
     def func_test(self):
         if self.test:
-            self.test_port()
-            self.test_ping()
+            self.test_network()
         for x in self.test.split(','):
+            if not x:
+                continue
             if hasattr(self, 'test_{}'.format(x)):
                 getattr(self, 'test_{}'.format(x))()
 
+    def test_network(self):
+        if self.data['network']:
+            return
+        self.test_port()
+        self.test_ping()
+        if self.data['info'].get('server'):
+            d1 = requests.get('https://api.ip.sb/geoip/{server}'.format(**self.data['info']), timeout=TIMEOUT).json()
+        self.data['info'].update(d1)
+
     def test_port(self):
-        if self.data.get('info'):
+        if self.data['info'].get('port'):
             self.log.info('Testing remote server port.')
-            self.data['network']['status'] = check_remote_port(server=self.data['info']['server'],
-                                                               port=self.data['info']['port'])
+            status = check_remote_port(server=self.data['info']['server'], port=self.data['info']['port'])
+            self.data['network']['status'] = status
+            return status
 
     def test_ping(self):
         if self.data['network'].get('status') != 'open':
@@ -269,10 +289,10 @@ class SSProxy:
             self.data['network'].update(m.groupdict())
 
     def _test_web(self, name, url, timeout=TIMEOUT):
-        if self.data['network'].get('port') == 'close':
-            return
         if 'web' not in self.data:
             self.data['web'] = {}
+        if self.data.get('info') and self.data['network'].get('status') != 'open':
+            return self.data['web'].get(name, -1)
         with Connect(self.data, log=self.log) as con:
             if self.data.get('tunnel'):
                 start = time.time()
@@ -295,18 +315,21 @@ class SSProxy:
         with Connect(self.data, log=self.log) as con:
             if not self.data.get('tunnel'):
                 return
-            con.set_socks_proxy()
-            self.log.info('Testing speed.')
-            speedtest = Speedtest(timeout=TIMEOUT)
-            self.log.info('Retrieving best server.')
-            speedtest.get_best_server()
-            self.log.info('Testing download.')
-            speedtest.download(threads=1)
-            self.log.info('Testing upload.')
-            speedtest.upload(threads=1)
-            d = {x: speedtest.results.server[x] for x in ['name', 'sponsor', 'url', 'country']}
-            d.update({x: round(getattr(speedtest.results, x), 2) for x in ['ping', 'download', 'upload']})
-            self.data['speedtest'] = d
+            try:
+                con.set_socks_proxy()
+                self.log.info('Testing speed.')
+                speedtest = Speedtest(timeout=TIMEOUT)
+                self.log.info('Retrieving best server.')
+                speedtest.get_best_server()
+                self.log.info('Testing download.')
+                speedtest.download(threads=1)
+                self.log.info('Testing upload.')
+                speedtest.upload(threads=1)
+                d = {x: speedtest.results.server[x] for x in ['name', 'sponsor', 'url', 'country']}
+                d.update({x: round(getattr(speedtest.results, x), 2) for x in ['ping', 'download', 'upload']})
+                self.data['speedtest'] = d
+            except Exception as e:
+                return
 
     def display(self):
         if self.data.get('info'):
